@@ -3,6 +3,7 @@ from configparser import ConfigParser
 import requests
 from datetime import datetime
 from tqdm import tqdm
+from itertools import islice
 
 class Word:
     def __init__(self):
@@ -24,37 +25,53 @@ CSV_HEADER = [
     "antonym_words"
 ]
 
-def initial_word_list(input_file_path):
+START_LINE = 900
+END_LINE = 903
+
+def initial_word_list(input_file_path, start_line = START_LINE, end_line = END_LINE) -> list[Word]:
     word_list = []
-    with open(input_file_path) as csvfile:
+    with open(input_file_path, mode = 'r', encoding = "utf-8-sig") as csvfile:
         reader = csv.reader(csvfile)
-        for row in reader:
+        for row in list(islice(reader, start_line, end_line)):
             new_word = Word()
             new_word.word_text = row[0].lower()
             new_word.chinese = row[1]
             word_list.append(new_word)
     return word_list
 
-def fetch_from_mw(word_list: list[Word], api_key, dictionary_url, thesaurus_url, timeout = 30, max_word_length = 400):
+def flatten(lst):
+    for item in lst:
+        if isinstance(item, list):
+            yield from flatten(item)
+        else:
+            yield item
+
+def fetch_from_mw(word_list: list[Word], dictionary_key, dictionary_url, thesaurus_key, thesaurus_url, timeout = 30, max_word_length = 400):
     if len(word_list) == 0:
         return []
     if len(word_list) > max_word_length:
         word_list = word_list[:max_word_length]
+    print("Fetching the word list:")
+    failed_word_list = []
     for word in tqdm(word_list):
-        response = requests.get(url = dictionary_url + word.word_text, params = {"key": api_key}, timeout = timeout)
+        response = requests.get(url = dictionary_url + word.word_text, params = {"key": dictionary_key}, timeout = timeout)
         data = response.json()
         if data and isinstance(data[0], dict):
             definitions = data[0].get("shortdef", [])
             word.english = "; ".join(definitions)
-        response = requests.get(url = thesaurus_url + word.word_text, params = {"key": api_key}, timeout = timeout)
+        response = requests.get(url = thesaurus_url + word.word_text, params = {"key": thesaurus_key}, timeout = timeout)
         data = response.json()
         if data and isinstance(data[0], dict):
-            synonym_words = data[0].get("syns", [])
+            entry = data[0]
+            synonym_words = entry["meta"].get("syns", [])
             if synonym_words is not None and len(synonym_words) > 0:
-                word.sys_list = "; ".join(synonym_words)
-            antonym_words = data[0].get("syns", [])
+                word.sys_list = "; ".join(flatten(synonym_words))
+            antonym_words = entry["meta"].get("ants", [])
             if antonym_words is not None and len(antonym_words) > 0:
-                word.ant_list = "; ".join(antonym_words)
+                word.ant_list = "; ".join(flatten(antonym_words))
+    if len(failed_word_list) > 0:
+        print("Here is the list of failed words: ")
+        print(word.word_text for word in failed_word_list)
     return word_list
 
 def create_output_csv(word_list: list[Word], output_file_path_pattern, timestamp_format):
@@ -71,8 +88,9 @@ def create_output_csv(word_list: list[Word], output_file_path_pattern, timestamp
 def main():
     config = ConfigParser()
     config.read('config.ini')
-    api_key = config['api']['key']
+    dictionary_key = config['api']['dictionary_key']
     dictionary_url = config['api']['mw_dictionary_url']
+    thesaurus_key = config['api']['thesaurus_key']
     thesaurus_url = config['api']['mw_thesaurus_url']
     timeout = int(config['api']['timeout'])
 
@@ -80,12 +98,12 @@ def main():
     output_file_path_pattern = config['file']['out_put_path_pattern']
     timestamp_format = config['file']['timestamp_format']
     word_list = initial_word_list(input_file_path)
-    word_list = fetch_from_mw(word_list, api_key, dictionary_url, thesaurus_url, timeout)
+    word_list = fetch_from_mw(word_list, dictionary_key, dictionary_url, thesaurus_key, thesaurus_url, timeout)
     output_file = create_output_csv(word_list, output_file_path_pattern, timestamp_format)
     print(f"Succussfully create the output file {output_file}")
     return
 
-if __name__ == '__main__':
+def test_output():
     print(f"test in {datetime.now()}")
     test_word = Word()
     test_word.word_text = "example"
@@ -103,4 +121,21 @@ if __name__ == '__main__':
 
     test_file_path = create_output_csv([test_word], output_file_path_pattern, timestamp_format)
     print(f"Test complete, check file {test_file_path}")
-    
+
+def test_read_csv():
+    config = ConfigParser()
+    config.read('config.ini')
+
+    input_file_path = config['file']['input_file_path_name']
+    word_list = initial_word_list(input_file_path, 1, 5)
+    for word in word_list:
+        print(word.word_text + '\t\t' +  word.chinese)
+
+
+
+if __name__ == '__main__':
+    main()
+    '''
+    test_read_csv()
+    test_output()
+    '''
